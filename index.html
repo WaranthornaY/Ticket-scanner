@@ -123,7 +123,7 @@ const V={
   },
   scan(){
     return `<div class="card"><label class="m">Mode <select onchange="S.scanMode=this.value"><option value="checkin">Check-in (mark ticket used)</option><option value="verify" ${S.scanMode=="verify"?"selected":""}>Verify only</option></select></label>
-    <div id="reader"></div><div class="row"><input id="man" placeholder="Type code (T:… or O:…)"><button onclick="onCode($('#man').value)">Check</button></div></div>
+    <div id="reader"></div><div class="row"><input id="man" placeholder="Type code or ticket ID"><button onclick="onCode($('#man').value,true)">Check</button></div></div>
     <div id="res" class="res hide"></div><div class="card"><h3>Recent scans</h3><div id="hist"></div></div>`;
   },
   stats(){
@@ -206,17 +206,22 @@ async function doCounter(eid){
 }
 
 // ---------- Scanner ----------
-let qr=null,busy=false;
+let qr=null,busy=false,last={c:"",t:0};
 async function startScan(){
   if(qr||!$("#reader"))return;
   qr=new Html5Qrcode("reader");
-  try{await qr.start({facingMode:"environment"},{fps:10,qrbox:240},onCode,()=>{})}catch(e){toast("Camera unavailable: "+e);qr=null}
+  try{await qr.start({facingMode:"environment"},{fps:10,qrbox:w=>{const z=Math.floor(Math.min(w.width,w.height)*0.7);return{width:z,height:z}}},t=>onCode(t),()=>{})}
+  catch(e){toast("Camera unavailable: "+e);qr=null}
 }
 async function stopScan(){if(qr){try{await qr.stop()}catch{}qr=null}}
-async function onCode(t){
-  if(busy||!t)return;busy=true;
-  try{await handle(String(t).trim())}catch(e){res("bad",e.message)}
-  setTimeout(()=>busy=false,1500);
+async function onCode(t,manual){
+  t=String(t||"").trim();
+  if(!t||busy)return;
+  // the camera keeps re-reading the same QR: ignore repeats for 5s, otherwise a fresh check-in flips to "ALREADY USED"
+  if(!manual&&t==last.c&&Date.now()-last.t<5000)return;
+  busy=true;last={c:t,t:Date.now()};
+  try{await handle(t)}catch(e){res("bad",e.message)}
+  busy=false;
 }
 function res(kind,msg,t){
   const r=$("#res");if(!r)return toast(msg);
@@ -225,16 +230,22 @@ function res(kind,msg,t){
   navigator.vibrate?.(kind=="ok"?100:[100,60,100]);
 }
 async function handle(c){
-  if(c.startsWith("O:")){
-    const s=await db.doc("orders/"+c.slice(2)).get();
-    if(!s.exists)return res("bad","Unknown order");
-    const o={id:s.id,...s.data()};
-    if(o.status!=="pending")return res("bad","Order already "+o.status);
-    const r=$("#res");r.className="res";
-    r.innerHTML=`<h3>Purchase request</h3><p>${esc(o.username)} · ${esc(o.eventName)} × ${o.qty} = ${money(o.total)}</p>
-      <button class="pri" onclick="confirmOrder('${o.id}')">Confirm &amp; issue tickets</button> <button class="danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
-  }else if(c.startsWith("T:"))await checkTicket(c.slice(2));
-  else res("bad","Not a valid code");
+  let kind=c.slice(0,2),id=c.slice(2);
+  if(kind!=="T:"&&kind!=="O:"){kind="";id=c}
+  if(!/^[A-Za-z0-9]{10,40}$/.test(id))return res("bad","Not a valid code");
+  if(kind=="T:")return checkTicket(id);
+  if(kind=="O:")return orderCard(id);
+  if((await db.doc("tickets/"+id).get()).exists)return checkTicket(id); // plain id typed by hand
+  return orderCard(id);
+}
+async function orderCard(id){
+  const s=await db.doc("orders/"+id).get();
+  if(!s.exists)return res("bad","Unknown code");
+  const o={id:s.id,...s.data()};
+  if(o.status!=="pending")return res("bad","Order already "+o.status);
+  const r=$("#res");r.className="res";
+  r.innerHTML=`<h3>Purchase request</h3><p>${esc(o.username)} · ${esc(o.eventName)} × ${o.qty} = ${money(o.total)}</p>
+    <button class="pri" onclick="confirmOrder('${o.id}')">Confirm &amp; issue tickets</button> <button class="danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
 }
 async function checkTicket(id){
   const ref=db.doc("tickets/"+id);
