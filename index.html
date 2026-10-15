@@ -23,7 +23,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px;text-
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#fff;color:#000;padding:10px 16px;border-radius:8px;display:none;z-index:10}
 .stat{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.stat .card{text-align:center;margin:0}.stat b{font-size:26px;display:block}
 </style></head><body>
- 
+
 <div id="auth" class="card hide">
   <h2>🎟 TicketHub</h2>
   <input id="u" placeholder="Username" autocomplete="username">
@@ -36,17 +36,15 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px;text-
 </div>
 <div id="modal" class="hide" onclick="if(event.target==this)closeM()"><div class="card" id="mbody"></div></div>
 <div id="toast"></div>
- 
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script>
-// ===== 1. PASTE YOUR FIREBASE CONFIG HERE (Project settings > Your apps > Web) =====
-const cfg={apiKey:"YOUR_API_KEY",authDomain:"YOUR_PROJECT.firebaseapp.com",projectId:"YOUR_PROJECT",appId:"YOUR_APP_ID"};
+const cfg={apiKey:"AIzaSyB5OZFdqmL7Zzv0vAH83_NjFyli3NOa13g",authDomain:"ticket-scanner-d6bbf.firebaseapp.com",projectId:"ticket-scanner-d6bbf",appId:"1:1020011793122:web:cf773560cbf908091a2cbb"};
 const CUR="$"; // currency symbol
-// ==================================================================================
 firebase.initializeApp(cfg);
 const auth=firebase.auth(),db=firebase.firestore(),TS=firebase.firestore.FieldValue.serverTimestamp;
 const $=s=>document.querySelector(s);
@@ -61,7 +59,7 @@ function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";cl
 function modal(h){$("#mbody").innerHTML=h;$("#modal").classList.remove("hide");qrs($("#mbody"))}
 function closeM(){$("#modal").classList.add("hide")}
 function qrs(root){root.querySelectorAll("[data-qr]:not([data-done])").forEach(el=>{el.dataset.done=1;new QRCode(el,{text:el.dataset.qr,width:150,height:150})})}
- 
+
 // ---------- Auth ----------
 async function login(reg){
   const u=$("#u").value.trim(),p=$("#p").value;
@@ -86,7 +84,7 @@ auth.onAuthStateChanged(async u=>{
   if(S.admin)L(db.collection("scans").orderBy("time","desc").limit(15),"scans");
   render();
 });
- 
+
 // ---------- Rendering ----------
 function setTab(k){stopScan();S.tab=k;render()}
 function render(){
@@ -147,7 +145,7 @@ function csv(){
   const a=document.createElement("a");a.download="tickets.csv";
   a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(x=>`"${String(x??"").replace(/"/g,'""')}"`).join(",")).join("\n")],{type:"text/csv"}));a.click();
 }
- 
+
 // ---------- Events (admin) ----------
 function eventForm(id){
   const e=S.events.find(x=>x.id==id)||{active:true};
@@ -163,7 +161,7 @@ async function saveEvent(id){
   try{id?await db.doc("events/"+id).update(d):await db.collection("events").add({...d,sold:0,created:TS()});closeM()}catch(e){toast(e.message)}
 }
 const delEvent=id=>confirm("Delete this event? Existing tickets stay in the database.")&&db.doc("events/"+id).delete().catch(e=>toast(e.message));
- 
+
 // ---------- Purchasing ----------
 async function order(eid){
   const e=S.events.find(x=>x.id==eid),qty=Math.max(1,Math.min(10,parseInt($("#q"+eid).value)||1));
@@ -206,7 +204,7 @@ async function doCounter(eid){
     modal(`<h3>Tickets issued</h3>`+ids.map(i=>`<div class="qr" data-qr="T:${i}"></div><p class="m">${i}</p>`).join("")+`<br><button onclick="window.print()">Print</button> <button onclick="closeM()">Close</button>`);
   }catch(e){toast(e.message)}
 }
- 
+
 // ---------- Scanner ----------
 let qr=null,busy=false;
 async function startScan(){
@@ -254,5 +252,4 @@ async function checkTicket(id){
 function hist(){
   const h=$("#hist");if(h)h.innerHTML=S.scans.map(s=>`<p class="m">${s.time?.toDate?s.time.toDate().toLocaleTimeString():"…"} · ${s.result=="ok"?"✔":"✖"} ${esc(s.event)} ${esc(s.owner)} – ${esc(s.reason)}</p>`).join("")||`<p class="m">Nothing scanned yet.</p>`;
 }
-</script></body></html>
- 
+</script></body></html> 
