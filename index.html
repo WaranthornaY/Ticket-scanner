@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TicketHub</title>
+<style>
+:root{--bg:#0f1220;--card:#1a1f36;--tx:#eef0ff;--mut:#8b91b8;--ac:#6c7bff;--ok:#1fa971;--bad:#e5484d}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{display:flex;gap:12px;align-items:center;padding:12px 16px;background:var(--card)}header span{flex:1;color:var(--mut)}
+nav{display:flex;gap:6px;padding:10px 16px;overflow-x:auto}nav button.on{background:var(--ac);color:#fff}
+main{padding:0 16px 40px;max-width:1000px;margin:auto}
+button{background:#2a3157;color:var(--tx);border:0;border-radius:8px;padding:9px 14px;cursor:pointer;font-size:14px}
+button:hover{filter:brightness(1.2)}button.danger{background:var(--bad)}button.ghost{background:transparent;border:1px solid #333b66}
+.pri{background:var(--ac)}input,select,textarea{background:#0f1220;color:var(--tx);border:1px solid #333b66;border-radius:8px;padding:9px;font-size:14px;width:100%;margin:4px 0}
+.card{background:var(--card);border-radius:12px;padding:14px;margin:10px 0}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.grid .card{margin:0}.m{color:var(--mut);font-size:13px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row input{flex:1;width:auto}
+.hide{display:none!important}#auth{max-width:340px;margin:12vh auto}
+.res{border-radius:12px;padding:14px;margin:10px 0;background:var(--card)}.res.ok{background:var(--ok)}.res.bad{background:var(--bad)}
+.badge{padding:2px 8px;border-radius:99px;font-size:12px;background:#333b66}.b-valid,.b-confirmed{background:var(--ok)}.b-used{background:#777}.b-void,.b-rejected{background:var(--bad)}.b-pending{background:#c98a00}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px;text-align:left;border-bottom:1px solid #2a3157}
+.qr{background:#fff;padding:8px;display:inline-block;border-radius:8px;margin:6px 0}.used{opacity:.5}
+#modal{position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;padding:16px;z-index:9}
+#mbody{max-width:440px;width:100%;max-height:90vh;overflow:auto}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#fff;color:#000;padding:10px 16px;border-radius:8px;display:none;z-index:10}
+.stat{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.stat .card{text-align:center;margin:0}.stat b{font-size:26px;display:block}
+</style></head><body>
+ 
+<div id="auth" class="card hide">
+  <h2>🎟 TicketHub</h2>
+  <input id="u" placeholder="Username" autocomplete="username">
+  <input id="p" type="password" placeholder="Password (min 6)" autocomplete="current-password">
+  <div class="row"><button class="pri" onclick="login(false)">Login</button><button onclick="login(true)">Create account</button></div>
+</div>
+<div id="app" class="hide">
+  <header><b>🎟 TicketHub</b><span id="who"></span><button class="ghost" onclick="auth.signOut()">Logout</button></header>
+  <nav id="nav"></nav><main id="view"></main>
+</div>
+<div id="modal" class="hide" onclick="if(event.target==this)closeM()"><div class="card" id="mbody"></div></div>
+<div id="toast"></div>
+ 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+// ===== 1. PASTE YOUR FIREBASE CONFIG HERE (Project settings > Your apps > Web) =====
+const cfg={apiKey:"YOUR_API_KEY",authDomain:"YOUR_PROJECT.firebaseapp.com",projectId:"YOUR_PROJECT",appId:"YOUR_APP_ID"};
+const CUR="$"; // currency symbol
+// ==================================================================================
+firebase.initializeApp(cfg);
+const auth=firebase.auth(),db=firebase.firestore(),TS=firebase.firestore.FieldValue.serverTimestamp;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=n=>CUR+Number(n||0).toLocaleString();
+const fmt=d=>d?new Date(d).toLocaleString():"";
+const S={tab:"",unsubs:[],events:[],orders:[],tickets:[],scans:[],scanMode:"checkin",q:""};
+const uname=()=>S.user.email.split("@")[0];
+const mail=u=>u.trim().toLowerCase()+"@ticketapp.local";
+const stamp=t=>t?.toDate?t.toDate().toLocaleString():"…";
+function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display="none",3500)}
+function modal(h){$("#mbody").innerHTML=h;$("#modal").classList.remove("hide");qrs($("#mbody"))}
+function closeM(){$("#modal").classList.add("hide")}
+function qrs(root){root.querySelectorAll("[data-qr]:not([data-done])").forEach(el=>{el.dataset.done=1;new QRCode(el,{text:el.dataset.qr,width:150,height:150})})}
+ 
+// ---------- Auth ----------
+async function login(reg){
+  const u=$("#u").value.trim(),p=$("#p").value;
+  if(!/^[a-z0-9_]{3,20}$/i.test(u))return toast("Username: 3-20 letters, numbers or _");
+  try{
+    if(reg){
+      if(u.toLowerCase()==="admin")return toast("That username is reserved");
+      await auth.createUserWithEmailAndPassword(mail(u),p);
+    }else await auth.signInWithEmailAndPassword(mail(u),p);
+  }catch(e){toast(e.code=="auth/email-already-in-use"?"Username taken":e.code=="auth/invalid-credential"?"Wrong username or password":e.message)}
+}
+auth.onAuthStateChanged(async u=>{
+  S.unsubs.forEach(f=>f());S.unsubs=[];stopScan();S.user=u;
+  if(!u){S.admin=false;return render()}
+  try{S.admin=(await db.doc("admins/"+u.uid).get()).exists}catch{S.admin=false}
+  S.tab=S.admin?"scan":"events";
+  const L=(q,k)=>S.unsubs.push(q.onSnapshot(s=>{S[k]=s.docs.map(d=>({id:d.id,...d.data()}));render()},e=>toast(e.message)));
+  const o=db.collection("orders"),t=db.collection("tickets");
+  L(db.collection("events"),"events");
+  L(S.admin?o:o.where("uid","==",u.uid),"orders");
+  L(S.admin?t:t.where("uid","==",u.uid),"tickets");
+  if(S.admin)L(db.collection("scans").orderBy("time","desc").limit(15),"scans");
+  render();
+});
+ 
+// ---------- Rendering ----------
+function setTab(k){stopScan();S.tab=k;render()}
+function render(){
+  if(!S.user){$("#auth").classList.remove("hide");$("#app").classList.add("hide");return}
+  $("#auth").classList.add("hide");$("#app").classList.remove("hide");
+  $("#who").textContent=uname()+(S.admin?" (admin)":"");
+  const T=S.admin?[["scan","Scanner"],["events","Events"],["orders","Orders"],["tickets","Tickets"],["stats","Stats"]]
+                 :[["events","Events"],["orders","My orders"],["tickets","My tickets"]];
+  $("#nav").innerHTML=T.map(([k,l])=>`<button class="${S.tab==k?"on":""}" onclick="setTab('${k}')">${l}</button>`).join("");
+  if(S.tab=="scan"&&$("#reader")){hist();return} // don't rebuild while camera is running
+  $("#view").innerHTML=V[S.tab]();qrs($("#view"));
+  if(S.tab=="scan"){startScan();hist()}
+}
+const badge=s=>`<span class="badge b-${s}">${s}</span>`;
+const V={
+  events(){
+    const adm=S.admin,list=S.events.filter(e=>adm||e.active!==false).sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+    return (adm?`<p><button class="pri" onclick="eventForm()">+ New event</button></p>`:"")+
+    `<div class="grid">`+list.map(e=>{
+      const left=e.capacity-(e.sold||0);
+      const act=adm?`<button onclick="eventForm('${e.id}')">Edit</button> <button onclick="counter('${e.id}')">Sell at counter</button> <button class="danger" onclick="delEvent('${e.id}')">Delete</button>`
+        :left>0?`<input type="number" id="q${e.id}" min="1" max="${Math.min(10,left)}" value="1" style="width:70px"> <button class="pri" onclick="order('${e.id}')">Request ticket</button>`:"";
+      return `<div class="card"><h3>${esc(e.name)}</h3><p class="m">${esc(e.venue)} · ${fmt(e.date)}</p><p>${esc(e.desc)}</p>
+      <p><b>${money(e.price)}</b> · ${left>0?left+" left":"SOLD OUT"}${e.active===false?" · hidden":""}</p>${act}</div>`}).join("")+`</div>`+(list.length?"":`<p class="m">No events yet.</p>`);
+  },
+  orders(){
+    const l=[...S.orders].sort((a,b)=>(b.created?.seconds||0)-(a.created?.seconds||0));
+    if(S.admin)return `<div class="card" style="overflow:auto"><table><tr><th>User</th><th>Event</th><th>Qty</th><th>Total</th><th>Status</th><th></th></tr>`+
+      l.map(o=>`<tr><td>${esc(o.username)}</td><td>${esc(o.eventName)}</td><td>${o.qty}</td><td>${money(o.total)}</td><td>${badge(o.status)}</td><td>${o.status=="pending"?`<button onclick="confirmOrder('${o.id}')">Confirm</button> <button class="danger" onclick="rejectOrder('${o.id}')">Reject</button>`:""}</td></tr>`).join("")+`</table></div>`;
+    return l.map(o=>`<div class="card"><b>${esc(o.eventName)}</b> × ${o.qty} · ${money(o.total)} ${badge(o.status)}
+      ${o.status=="pending"?`<p class="m">Show this QR to the admin to confirm your purchase:</p><div class="qr" data-qr="O:${o.id}"></div><br><button class="ghost" onclick="cancelOrder('${o.id}')">Cancel request</button>`:""}</div>`).join("")||`<p class="m">No orders yet.</p>`;
+  },
+  tickets(){
+    if(S.admin)return `<div class="row"><input placeholder="Search owner, event or ticket id" value="${esc(S.q)}" oninput="S.q=this.value;$('#tl').innerHTML=tickRows()"><button onclick="csv()">Export CSV</button></div><div class="card" style="overflow:auto"><table><tr><th>Event</th><th>Owner</th><th>Status</th><th>Used at</th><th></th></tr><tbody id="tl">${tickRows()}</tbody></table></div>`;
+    return `<div class="grid">`+S.tickets.map(t=>`<div class="card ${t.status!="valid"?"used":""}"><b>${esc(t.eventName)}</b><p class="m">${esc(t.venue)} · ${fmt(t.date)}</p>${badge(t.status)}<br><div class="qr" data-qr="T:${t.id}"></div><p class="m">${t.id}</p></div>`).join("")+`</div>`+(S.tickets.length?"":`<p class="m">No tickets yet.</p>`);
+  },
+  scan(){
+    return `<div class="card"><label class="m">Mode <select onchange="S.scanMode=this.value"><option value="checkin">Check-in (mark ticket used)</option><option value="verify" ${S.scanMode=="verify"?"selected":""}>Verify only</option></select></label>
+    <div id="reader"></div><div class="row"><input id="man" placeholder="Type code (T:… or O:…)"><button onclick="onCode($('#man').value)">Check</button></div></div>
+    <div id="res" class="res hide"></div><div class="card"><h3>Recent scans</h3><div id="hist"></div></div>`;
+  },
+  stats(){
+    const c=S.orders.filter(o=>o.status=="confirmed"),rev=c.reduce((s,o)=>s+(o.total||0),0);
+    const k=[["Events",S.events.length],["Tickets issued",S.tickets.length],["Checked in",S.tickets.filter(t=>t.status=="used").length],["Void",S.tickets.filter(t=>t.status=="void").length],["Pending orders",S.orders.filter(o=>o.status=="pending").length],["Revenue",money(rev)]];
+    const per=S.events.map(e=>{const n=S.tickets.filter(t=>t.eventId==e.id);return `<tr><td>${esc(e.name)}</td><td>${n.length}/${e.capacity}</td><td>${n.filter(t=>t.status=="used").length}</td></tr>`}).join("");
+    return `<div class="stat">${k.map(([l,v])=>`<div class="card"><b>${v}</b><span class="m">${l}</span></div>`).join("")}</div><div class="card"><table><tr><th>Event</th><th>Sold/Capacity</th><th>Checked in</th></tr>${per}</table></div>`;
+  }
+};
+function tickRows(){
+  const q=S.q.toLowerCase();
+  return S.tickets.filter(t=>[t.id,t.owner,t.eventName].join(" ").toLowerCase().includes(q)).map(t=>
+   `<tr><td>${esc(t.eventName)}</td><td>${esc(t.owner)}</td><td>${badge(t.status)}</td><td>${t.usedAt?stamp(t.usedAt):""}</td><td>${t.status=="void"?`<button onclick="setT('${t.id}','valid')">Restore</button>`:`<button onclick="setT('${t.id}','void')">Void</button>`}${t.status=="used"?` <button onclick="setT('${t.id}','valid')">Reset</button>`:""} <button class="ghost" onclick="showQR('${t.id}')">QR</button></td></tr>`).join("");
+}
+const setT=(id,s)=>db.doc("tickets/"+id).update({status:s,usedAt:s=="valid"?null:TS()}).catch(e=>toast(e.message));
+const showQR=id=>modal(`<div class="qr" data-qr="T:${id}"></div><p class="m">${id}</p><button onclick="closeM()">Close</button>`);
+function csv(){
+  const rows=[["id","event","owner","status","price"],...S.tickets.map(t=>[t.id,t.eventName,t.owner,t.status,t.price])];
+  const a=document.createElement("a");a.download="tickets.csv";
+  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(x=>`"${String(x??"").replace(/"/g,'""')}"`).join(",")).join("\n")],{type:"text/csv"}));a.click();
+}
+ 
+// ---------- Events (admin) ----------
+function eventForm(id){
+  const e=S.events.find(x=>x.id==id)||{active:true};
+  modal(`<h3>${id?"Edit":"New"} event</h3><input id="f1" placeholder="Name" value="${esc(e.name)}"><input id="f2" placeholder="Venue / screen" value="${esc(e.venue)}">
+  <input id="f3" type="datetime-local" value="${esc(e.date)}"><input id="f4" type="number" min="0" placeholder="Price" value="${e.price??""}">
+  <input id="f5" type="number" min="1" placeholder="Capacity (seats)" value="${e.capacity??""}"><textarea id="f6" placeholder="Description">${esc(e.desc)}</textarea>
+  <label><input type="checkbox" id="f7" style="width:auto" ${e.active!==false?"checked":""}> On sale (visible to users)</label>
+  <div class="row"><button class="pri" onclick="saveEvent('${id||""}')">Save</button><button class="ghost" onclick="closeM()">Cancel</button></div>`);
+}
+async function saveEvent(id){
+  const d={name:$("#f1").value.trim(),venue:$("#f2").value.trim(),date:$("#f3").value,price:+$("#f4").value,capacity:+$("#f5").value,desc:$("#f6").value.trim(),active:$("#f7").checked};
+  if(!d.name||!d.date||!(d.capacity>0))return toast("Name, date and capacity required");
+  try{id?await db.doc("events/"+id).update(d):await db.collection("events").add({...d,sold:0,created:TS()});closeM()}catch(e){toast(e.message)}
+}
+const delEvent=id=>confirm("Delete this event? Existing tickets stay in the database.")&&db.doc("events/"+id).delete().catch(e=>toast(e.message));
+ 
+// ---------- Purchasing ----------
+async function order(eid){
+  const e=S.events.find(x=>x.id==eid),qty=Math.max(1,Math.min(10,parseInt($("#q"+eid).value)||1));
+  try{
+    await db.collection("orders").add({uid:S.user.uid,username:uname(),eventId:eid,eventName:e.name,qty,total:e.price*qty,status:"pending",created:TS()});
+    toast("Requested! Show the QR in My orders to the admin.");setTab("orders");
+  }catch(err){toast(err.message)}
+}
+const cancelOrder=id=>db.doc("orders/"+id).delete().catch(e=>toast(e.message));
+const rejectOrder=id=>db.doc("orders/"+id).update({status:"rejected"}).then(()=>res("bad","Order rejected")).catch(e=>toast(e.message));
+async function issue(eid,qty,uid,owner,oid){
+  const ids=[];
+  await db.runTransaction(async tx=>{
+    ids.length=0;
+    const eR=db.doc("events/"+eid),ed=(await tx.get(eR)).data();
+    if(!ed)throw Error("Event no longer exists");
+    if(oid){const od=(await tx.get(db.doc("orders/"+oid))).data();if(od.status!=="pending")throw Error("Order is already "+od.status);qty=od.qty;uid=od.uid;owner=od.username}
+    if((ed.sold||0)+qty>ed.capacity)throw Error("Not enough seats left");
+    for(let i=0;i<qty;i++){const r=db.collection("tickets").doc();ids.push(r.id);
+      tx.set(r,{eventId:eid,eventName:ed.name,venue:ed.venue,date:ed.date,price:ed.price,uid,owner,orderId:oid||null,status:"valid",created:TS()})}
+    tx.update(eR,{sold:(ed.sold||0)+qty});
+    if(oid)tx.update(db.doc("orders/"+oid),{status:"confirmed",ticketIds:ids,total:ed.price*qty,confirmedAt:TS()});
+  });
+  return ids;
+}
+async function confirmOrder(id){
+  try{
+    const o=(await db.doc("orders/"+id).get()).data();
+    await issue(o.eventId,o.qty,o.uid,o.username,id);
+    res("ok","Purchase confirmed – "+o.qty+" ticket(s) issued to "+o.username);
+  }catch(e){res("bad",e.message)}
+}
+function counter(eid){
+  modal(`<h3>Sell at counter</h3><input id="cq" type="number" min="1" value="1"><input id="cn" placeholder="Buyer name (optional)">
+  <div class="row"><button class="pri" onclick="doCounter('${eid}')">Issue tickets</button><button class="ghost" onclick="closeM()">Cancel</button></div>`);
+}
+async function doCounter(eid){
+  try{
+    const ids=await issue(eid,Math.max(1,parseInt($("#cq").value)||1),null,$("#cn").value.trim()||"walk-in");
+    modal(`<h3>Tickets issued</h3>`+ids.map(i=>`<div class="qr" data-qr="T:${i}"></div><p class="m">${i}</p>`).join("")+`<br><button onclick="window.print()">Print</button> <button onclick="closeM()">Close</button>`);
+  }catch(e){toast(e.message)}
+}
+ 
+// ---------- Scanner ----------
+let qr=null,busy=false;
+async function startScan(){
+  if(qr||!$("#reader"))return;
+  qr=new Html5Qrcode("reader");
+  try{await qr.start({facingMode:"environment"},{fps:10,qrbox:240},onCode,()=>{})}catch(e){toast("Camera unavailable: "+e);qr=null}
+}
+async function stopScan(){if(qr){try{await qr.stop()}catch{}qr=null}}
+async function onCode(t){
+  if(busy||!t)return;busy=true;
+  try{await handle(String(t).trim())}catch(e){res("bad",e.message)}
+  setTimeout(()=>busy=false,1500);
+}
+function res(kind,msg,t){
+  const r=$("#res");if(!r)return toast(msg);
+  r.className="res "+kind;
+  r.innerHTML=`<h2>${kind=="ok"?"✔":"✖"} ${esc(msg)}</h2>`+(t?`<p>${esc(t.eventName)} · ${esc(t.owner)}</p>`:"");
+  navigator.vibrate?.(kind=="ok"?100:[100,60,100]);
+}
+async function handle(c){
+  if(c.startsWith("O:")){
+    const s=await db.doc("orders/"+c.slice(2)).get();
+    if(!s.exists)return res("bad","Unknown order");
+    const o={id:s.id,...s.data()};
+    if(o.status!=="pending")return res("bad","Order already "+o.status);
+    const r=$("#res");r.className="res";
+    r.innerHTML=`<h3>Purchase request</h3><p>${esc(o.username)} · ${esc(o.eventName)} × ${o.qty} = ${money(o.total)}</p>
+      <button class="pri" onclick="confirmOrder('${o.id}')">Confirm &amp; issue tickets</button> <button class="danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
+  }else if(c.startsWith("T:"))await checkTicket(c.slice(2));
+  else res("bad","Not a valid code");
+}
+async function checkTicket(id){
+  const ref=db.doc("tickets/"+id);
+  const out=await db.runTransaction(async tx=>{
+    const s=await tx.get(ref);if(!s.exists)return{ok:0,m:"Ticket not found"};
+    const t=s.data();
+    if(t.status=="void")return{ok:0,m:"Ticket is VOID",t};
+    if(t.status=="used")return{ok:0,m:"ALREADY USED "+stamp(t.usedAt),t};
+    if(S.scanMode=="verify")return{ok:1,m:"VALID (not checked in)",t};
+    tx.update(ref,{status:"used",usedAt:TS()});return{ok:1,m:"VALID – checked in",t};
+  });
+  res(out.ok?"ok":"bad",out.m,out.t);
+  db.collection("scans").add({ticket:id,event:out.t?.eventName||"",owner:out.t?.owner||"",result:out.ok?"ok":"rejected",reason:out.m,time:TS()}).catch(()=>{});
+}
+function hist(){
+  const h=$("#hist");if(h)h.innerHTML=S.scans.map(s=>`<p class="m">${s.time?.toDate?s.time.toDate().toLocaleTimeString():"…"} · ${s.result=="ok"?"✔":"✖"} ${esc(s.event)} ${esc(s.owner)} – ${esc(s.reason)}</p>`).join("")||`<p class="m">Nothing scanned yet.</p>`;
+}
+</script></body></html>
+ 
